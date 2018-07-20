@@ -1,9 +1,9 @@
 import { prop } from 'ramda';
 import { combineReducers } from "redux";
 import { combineEpics } from "redux-observable";
-import { never } from "rxjs";
+import { never, Observable } from "rxjs";
 import websocketConnect from 'rxjs-websockets';
-import { map } from 'rxjs/operators';
+import { filter, map } from 'rxjs/operators';
 import { ActionsUnion, createAction, createEmptyNormalizedState, NormalizedModelState } from "./typeUtils";
 
 export interface ApplicationState {
@@ -41,15 +41,21 @@ export const planetChanged = (planet: string) =>
     createAction(ActionType.PLANET_CHANGED, {
         planet
     });
+export const scrollUp = () => createAction(ActionType.SCROLL_UP);
+export const scrollDown = () => createAction(ActionType.SCROLL_DOWN);
 
 const ActionCreator = {
-    planetChanged
+    planetChanged,
+    scrollUp,
+    scrollDown
 }
 
 type Action = ActionsUnion<typeof ActionCreator>;
 
 export enum ActionType {
-    PLANET_CHANGED = 'PLANET_CHANGED'
+    PLANET_CHANGED = 'PLANET_CHANGED',
+    SCROLL_UP = 'SCROLL_UP',
+    SCROLL_DOWN = 'SCROLL_DOWN'
 }
 
 const { messages } = websocketConnect('ws://localhost:4000', never());
@@ -60,4 +66,13 @@ const planetEpic = () => messages
         map(res => planetChanged(res.name))
     );
 
-export const rootEpic = combineEpics(planetEpic);
+const scrollDownEpic = (action$: Observable<Action>) => {
+    return action$.pipe(
+        filter(() => false)
+    )
+};
+
+export const rootEpic = combineEpics(
+    planetEpic,
+    scrollDownEpic
+);
