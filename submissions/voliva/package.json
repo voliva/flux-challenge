@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
+    "ramda": "^0.25.0",
     "react": "^16.4.1",
     "react-dom": "^16.4.1",
     "react-redux": "^5.0.7",
     "redux": "^4.0.0",
     "redux-observable": "^1.0.0",
-    "rxjs": "^6.2.2"
+    "reselect": "^3.0.1",
+    "rxjs": "^6.2.2",
+    "rxjs-websockets": "^6.0.2"
   },
   "scripts": {
     "start": "react-scripts-ts start",
@@ -19,6 +22,7 @@
   "devDependencies": {
     "@types/jest": "^23.3.0",
     "@types/node": "^10.5.2",
+    "@types/ramda": "^0.25.35",
     "@types/react": "^16.4.6",
     "@types/react-dom": "^16.0.6",
     "@types/react-redux": "^6.0.4",

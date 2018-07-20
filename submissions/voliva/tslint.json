@@ -9,6 +9,8 @@
   "rules": {
     "ordered-imports": false,
     "interface-name": false,
-    "no-empty-interface": false
+    "no-empty-interface": false,
+    "no-console": false,
+    "no-shadowed-variable": false
   }
 }

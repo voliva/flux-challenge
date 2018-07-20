@@ -6,12 +6,12 @@ import registerServiceWorker from './registerServiceWorker';
 import './styles.css';
 import { createStore, applyMiddleware } from 'redux';
 import { Provider } from 'react-redux';
-import { rootReducer, rootEpic } from './redux';
+import { createRootReducer, rootEpic } from './redux';
 import { createEpicMiddleware } from 'redux-observable';
 
 const epicMiddleWare = createEpicMiddleware();
 const store = createStore(
-  rootReducer,
+  createRootReducer(),
   applyMiddleware(epicMiddleWare)
 );
 epicMiddleWare.run(rootEpic);
