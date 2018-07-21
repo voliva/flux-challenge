@@ -1,18 +1,21 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
+import { Provider } from 'react-redux';
+import { applyMiddleware, createStore } from 'redux';
+import { composeWithDevTools } from 'redux-devtools-extension';
+import { createEpicMiddleware } from 'redux-observable';
 import App from './app/App';
 import './index.css';
+import { createRootReducer, rootEpic } from './redux';
 import registerServiceWorker from './registerServiceWorker';
 import './styles.css';
-import { createStore, applyMiddleware } from 'redux';
-import { Provider } from 'react-redux';
-import { createRootReducer, rootEpic } from './redux';
-import { createEpicMiddleware } from 'redux-observable';
 
 const epicMiddleWare = createEpicMiddleware();
 const store = createStore(
   createRootReducer(),
-  applyMiddleware(epicMiddleWare)
+  composeWithDevTools(
+    applyMiddleware(epicMiddleWare)
+  )
 );
 epicMiddleWare.run(rootEpic);
 

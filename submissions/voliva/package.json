@@ -27,6 +27,7 @@
     "@types/react-dom": "^16.0.6",
     "@types/react-redux": "^6.0.4",
     "react-scripts-ts": "2.16.0",
+    "redux-devtools-extension": "^2.13.5",
     "typescript": "^2.9.2"
   }
 }

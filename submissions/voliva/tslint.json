@@ -12,6 +12,8 @@
     "no-empty-interface": false,
     "no-console": false,
     "no-shadowed-variable": false,
-    "object-literal-sort-keys": false
+    "object-literal-sort-keys": false,
+    "triple-equals": false,
+    "no-debugger": false
   }
 }
