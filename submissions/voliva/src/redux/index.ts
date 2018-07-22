@@ -1,13 +1,13 @@
-import { prop } from 'ramda';
+import { defaultTo, prop } from 'ramda';
+import createCachedSelector from 're-reselect';
 import { combineReducers } from "redux";
 import { combineEpics, ofType } from "redux-observable";
-import { merge, never, Observable } from "rxjs";
+import { createSelector } from 'reselect';
+import { empty, merge, never, Observable } from "rxjs";
 import websocketConnect from 'rxjs-websockets';
 import { filter, flatMap, map, withLatestFrom } from 'rxjs/operators';
 import { observableFetch } from './observableFetch';
-import { ActionsUnion, createAction, createEmptyNormalizedState, NormalizedModelState, ModelMap } from "./typeUtils";
-import { createSelector } from 'reselect';
-import createCachedSelector from 're-reselect';
+import { ActionsUnion, createAction, createEmptyNormalizedState, ModelMap, NormalizedModelState } from "./typeUtils";
 
 /// State
 export interface ApplicationState {
@@ -27,6 +27,9 @@ export const getJediWindowArray = createSelector<ApplicationState, JediWindow, n
     }
     return ret;
 });
+export const getReversedWindowArray = createSelector(getJediWindowArray, arr => [
+    ...arr
+].reverse());
 
 // TODO Careful with caching... we should not cache jedis when they're out.
 export const getSithByIndex = createCachedSelector(
@@ -44,6 +47,18 @@ const currentPlanet = (planet: string = '', action: Action) => {
 }
 
 const jediWindow = (jediWindow: JediWindow = {start:0, end: 4}, action: Action) => {
+    if(action.type === ActionType.SCROLL_UP) {
+        return {
+            start: jediWindow.start - 1,
+            end: jediWindow.end - 1
+        };
+    }
+    if(action.type === ActionType.SCROLL_DOWN) {
+        return {
+            start: jediWindow.start + 1,
+            end: jediWindow.end + 1
+        };
+    }
     return jediWindow;
 }
 
@@ -116,16 +131,52 @@ const planetEpic = () => messages
         map(res => planetChanged(res.name))
     );
 
-const scrollDownEpic = (action$: Observable<Action>, state$: Observable<ApplicationState>) => {
-    const request = (id: string, idx: number) => observableFetch(`http://localhost:3000/dark-jedis/${id}`)
-        .pipe(
-            map(res => ({
-                res,
-                idx
-            }))
-        );
 
-    const initialRequest = request('3616', 0);
+const requestJedi = (id: string, idx: number) => observableFetch(`http://localhost:3000/dark-jedis/${id}`)
+    .pipe(
+        map(res => ({
+            res,
+            idx
+        }))
+    );
+
+const mapResult = ({res,idx}: {res: Response, idx: number}) => res.json()
+    .then(res => ({
+        idx,
+        id: `${res.id}`,
+        name: res.name,
+        homeWorld: res.homeworld.name,
+        master: res.master.id && `${res.master.id}`,
+        apprentice: res.apprentice.id && `${res.apprentice.id}`
+    }));
+
+const initialRequestEpic = () => requestJedi('3616', 0).pipe(
+    flatMap(mapResult),
+    map(darkJediLoaded)
+);
+
+
+interface ScrollEpicParams {
+    firstJediIdx: (state: ApplicationState) => number | undefined,
+    hasNext: (jedi: DarkJedi) => boolean,
+    requestNext: (jedi: DarkJedi) => ReturnType<typeof requestJedi>,
+    loadedJediTriggersNext: (state: ApplicationState, jedi: DarkJedi) => boolean,
+    nextScrollAction: ActionType,
+    scrollTriggersLoad: (state: ApplicationState) => boolean
+
+}
+
+const scrollEpic = 
+({
+    firstJediIdx,
+    hasNext,
+    requestNext,
+    loadedJediTriggersNext,
+    nextScrollAction,
+    scrollTriggersLoad,
+}: ScrollEpicParams) =>
+(action$: Observable<Action>, state$: Observable<ApplicationState>) => {
+
     // const nextRequest = (state: ApplicationState) => {
     //     const needsLoad = state.idxToId[state.jediWindow.end];
     //     if(!needsLoad) return empty();
@@ -153,25 +204,37 @@ const scrollDownEpic = (action$: Observable<Action>, state$: Observable<Applicat
     */
 
     const load = merge(
-        initialRequest,
         action$.pipe(
             ofType<Action, ReturnType<typeof darkJediLoaded>>(ActionType.DARK_JEDI_LOADED),
             map(action => action.payload),
-            filter(jedi => !!jedi.apprentice),
+            filter(hasNext), // loaded jedi has next jedi to be loaded
+            // tap(jedi => console.log(nextScrollAction, 'jedi has next', jedi)),
             withLatestFrom(state$),
-            filter(([jedi, state]) => state.jediWindow.end > jedi.idx),
-            flatMap(([jedi,]) => request(jedi.apprentice, jedi.idx+1))
+            filter(([jedi, state]) => loadedJediTriggersNext(state, jedi)),
+            // tap(([jedi, state]) => console.log(nextScrollAction, 'trigger next', jedi, state)),
+            flatMap(([jedi,]) => requestNext(jedi))
         ),
-        // action$.pipe(
-        //     ofType(ActionType.SCROLL_DOWN),
-        //     combineLatest(
-        //         state$.pipe(map(isLoading))
-        //     ),
-        //     filter(([,isLoading]) => !isLoading),
-        //     flatMap(() => loadNext)
-        // )
-    );
+        action$.pipe(
+            ofType(nextScrollAction),
+            withLatestFrom(
+                state$
+            ),
+            map(([,state]) => state),
+            filter(scrollTriggersLoad),
+            flatMap(state => {
+                const idx = firstJediIdx(state);
+                if(idx == undefined) {
+                    return empty();
+                }
+                const firstJedi = state.darkJedis.byId[state.idxToId[idx]];
 
+                if(!hasNext(firstJedi)) {
+                    return empty();
+                }
+                return requestNext(firstJedi);
+            })
+        )
+    );
 
     // const abort$ = merge(
     //     down$.pipe(map(() => 1)),
@@ -193,25 +256,49 @@ const scrollDownEpic = (action$: Observable<Action>, state$: Observable<Applicat
     //     filter(() => false)
     // )
 
-    const mapResult = ({res,idx}: {res: Response, idx: number}) => res.json()
-        .then(res => ({
-            idx,
-            id: `${res.id}`,
-            name: res.name,
-            homeWorld: res.homeworld.name,
-            master: `${res.master.id}`,
-            apprentice: res.apprentice.id && `${res.apprentice.id}`
-        }));
-
     return load.pipe(
         flatMap(mapResult),
         map(darkJediLoaded)
     );
 };
 
+// TODO move this to selectors
+const firstJediIdx = (state: ApplicationState) =>
+    getJediWindowArray(state).find(idx => state.idxToId[idx] != undefined);
+const lastJediIdx = (state: ApplicationState) => 
+    getReversedWindowArray(state).find(idx => state.idxToId[idx] != undefined);
+
+const scrollUpEpic = scrollEpic({
+    firstJediIdx,
+    hasNext: jedi => !!jedi.master,
+    loadedJediTriggersNext: (state, jedi) =>
+        jedi.idx <= defaultTo(Number.MAX_SAFE_INTEGER, firstJediIdx(state)) &&
+        jedi.idx > state.jediWindow.start,
+    nextScrollAction: ActionType.SCROLL_UP,
+    requestNext: jedi => requestJedi(jedi.master, jedi.idx-1),
+    scrollTriggersLoad: state =>
+        state.idxToId[state.jediWindow.start+1] != undefined && 
+        state.idxToId[state.jediWindow.start] == undefined
+});
+
+const scrollDownEpic = scrollEpic({
+    firstJediIdx: lastJediIdx,
+    hasNext: jedi => !!jedi.apprentice,
+    loadedJediTriggersNext: (state, jedi) =>
+        jedi.idx >= defaultTo(-Number.MAX_SAFE_INTEGER, lastJediIdx(state)) &&
+        jedi.idx < state.jediWindow.end,
+    nextScrollAction: ActionType.SCROLL_DOWN,
+    requestNext: jedi => requestJedi(jedi.apprentice, jedi.idx+1),
+    scrollTriggersLoad: state =>
+        state.idxToId[state.jediWindow.end-1] != undefined && 
+        state.idxToId[state.jediWindow.end] == undefined
+});
+
 export const rootEpic = combineEpics(
     planetEpic,
-    scrollDownEpic
+    initialRequestEpic,
+    scrollDownEpic,
+    scrollUpEpic
 );
 
 /// Substates
