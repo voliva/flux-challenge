@@ -3,7 +3,7 @@ import createCachedSelector from 're-reselect';
 import { combineReducers } from "redux";
 import { combineEpics, ofType } from "redux-observable";
 import { createSelector } from 'reselect';
-import { empty, merge, never, Observable } from "rxjs";
+import { merge, never, Observable } from "rxjs";
 import websocketConnect from 'rxjs-websockets';
 import { filter, flatMap, map, withLatestFrom } from 'rxjs/operators';
 import { observableFetch } from './observableFetch';
@@ -160,9 +160,9 @@ interface ScrollEpicParams {
     firstJediIdx: (state: ApplicationState) => number | undefined,
     hasNext: (jedi: DarkJedi) => boolean,
     requestNext: (jedi: DarkJedi) => ReturnType<typeof requestJedi>,
-    loadedJediTriggersNext: (state: ApplicationState, jedi: DarkJedi) => boolean,
+    jediContinuesLoad: (state: ApplicationState, jedi: DarkJedi) => boolean,
     nextScrollAction: ActionType,
-    scrollTriggersLoad: (state: ApplicationState) => boolean
+    onlyNextIsUnloaded: (state: ApplicationState) => boolean
 
 }
 
@@ -171,38 +171,11 @@ const scrollEpic =
     firstJediIdx,
     hasNext,
     requestNext,
-    loadedJediTriggersNext,
+    jediContinuesLoad,
     nextScrollAction,
-    scrollTriggersLoad,
+    onlyNextIsUnloaded,
 }: ScrollEpicParams) =>
 (action$: Observable<Action>, state$: Observable<ApplicationState>) => {
-
-    // const nextRequest = (state: ApplicationState) => {
-    //     const needsLoad = state.idxToId[state.jediWindow.end];
-    //     if(!needsLoad) return empty();
-
-    //     for(let i=state.jediWindow.end; i>=state.jediWindow.start; i--) {
-    //         if(state.jediWindow[i]) {
-    //             const darkJedi = state.darkJedis.byId[state.jediWindow[i]];
-    //             return request(darkJedi.apprentice, darkJedi.idx + 1);
-    //         }
-    //     }
-    //     return empty();
-    // }
-    // For nextRequest, I can take a more functional approach wtith something like this instead
-    // const loadNext = state$.pipe(
-    //     take(1),
-    //     map(getNeixtId),
-    //     filter(id => !!id),
-    //     flatMap(request)
-    // );
-
-    /* 3 posible causes to load a dark jedi:
-    1. Initial load: 3616, 0
-    2. On load, checking that window.end > loaded.idx
-    3. On scroll down, checking that only window.end is not loaded
-    */
-
     const load = merge(
         action$.pipe(
             ofType<Action, ReturnType<typeof darkJediLoaded>>(ActionType.DARK_JEDI_LOADED),
@@ -210,7 +183,7 @@ const scrollEpic =
             filter(hasNext), // loaded jedi has next jedi to be loaded
             // tap(jedi => console.log(nextScrollAction, 'jedi has next', jedi)),
             withLatestFrom(state$),
-            filter(([jedi, state]) => loadedJediTriggersNext(state, jedi)),
+            filter(([jedi, state]) => jediContinuesLoad(state, jedi)),
             // tap(([jedi, state]) => console.log(nextScrollAction, 'trigger next', jedi, state)),
             flatMap(([jedi,]) => requestNext(jedi))
         ),
@@ -220,19 +193,13 @@ const scrollEpic =
                 state$
             ),
             map(([,state]) => state),
-            filter(scrollTriggersLoad),
-            flatMap(state => {
-                const idx = firstJediIdx(state);
-                if(idx == undefined) {
-                    return empty();
-                }
-                const firstJedi = state.darkJedis.byId[state.idxToId[idx]];
-
-                if(!hasNext(firstJedi)) {
-                    return empty();
-                }
-                return requestNext(firstJedi);
-            })
+            filter(onlyNextIsUnloaded), // This means that we were not loading anything.
+            map(state => {
+                const idx = firstJediIdx(state) as number; // We are sure we have at least 1 loaded because onlyNextIsUnloaded
+                return state.darkJedis.byId[state.idxToId[idx]];
+            }),
+            filter(hasNext),
+            flatMap(requestNext)
         )
     );
 
@@ -243,18 +210,6 @@ const scrollEpic =
     //     scan((t:number, v:number) => t+v, 0),
     //     filter(v => v < 0)
     // );
-
-    // const request$ = observableFetch(`http://localhost:3000/dark-jedis/3616`)
-    //     .pipe(
-    //         takeUntil(abort$)
-    //     )
-
-    // TODO check if flatMap waits for the previous to finish. Else I'll need to check the state (maybe?)
-    // return down$.pipe(
-    //     flatMap(() => request$),
-    //     map(res => console.log(res) || null as any),
-    //     filter(() => false)
-    // )
 
     return load.pipe(
         flatMap(mapResult),
@@ -271,12 +226,12 @@ const lastJediIdx = (state: ApplicationState) =>
 const scrollUpEpic = scrollEpic({
     firstJediIdx,
     hasNext: jedi => !!jedi.master,
-    loadedJediTriggersNext: (state, jedi) =>
+    jediContinuesLoad: (state, jedi) =>
         jedi.idx <= defaultTo(Number.MAX_SAFE_INTEGER, firstJediIdx(state)) &&
         jedi.idx > state.jediWindow.start,
     nextScrollAction: ActionType.SCROLL_UP,
     requestNext: jedi => requestJedi(jedi.master, jedi.idx-1),
-    scrollTriggersLoad: state =>
+    onlyNextIsUnloaded: state =>
         state.idxToId[state.jediWindow.start+1] != undefined && 
         state.idxToId[state.jediWindow.start] == undefined
 });
@@ -284,12 +239,12 @@ const scrollUpEpic = scrollEpic({
 const scrollDownEpic = scrollEpic({
     firstJediIdx: lastJediIdx,
     hasNext: jedi => !!jedi.apprentice,
-    loadedJediTriggersNext: (state, jedi) =>
+    jediContinuesLoad: (state, jedi) =>
         jedi.idx >= defaultTo(-Number.MAX_SAFE_INTEGER, lastJediIdx(state)) &&
         jedi.idx < state.jediWindow.end,
     nextScrollAction: ActionType.SCROLL_DOWN,
     requestNext: jedi => requestJedi(jedi.apprentice, jedi.idx+1),
-    scrollTriggersLoad: state =>
+    onlyNextIsUnloaded: state =>
         state.idxToId[state.jediWindow.end-1] != undefined && 
         state.idxToId[state.jediWindow.end] == undefined
 });
