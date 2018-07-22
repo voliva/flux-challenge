@@ -1,4 +1,5 @@
-import { from, Observable, Observer } from "rxjs";
+import { empty, from, Observable, Observer } from "rxjs";
+import { catchError } from "rxjs/operators";
 
 export function observableFetch(input?: Request | string, init: RequestInit = {})
     :Observable<Response> {
@@ -6,10 +7,20 @@ export function observableFetch(input?: Request | string, init: RequestInit = {}
         const controller = new AbortController();
         init.signal = controller.signal;
 
-        from(fetch(input, init)).subscribe(obs);
+        const subscription = from(fetch(input, init))
+            .pipe(
+                catchError(ex => {
+                    console.warn(ex);
+                    return empty();
+                })
+            )
+            .subscribe(obs);
 
         return () => {
-            controller.abort();
+            if(!subscription.closed) {
+                subscription.unsubscribe();
+                controller.abort();
+            }
         }
     });
 }

@@ -3,18 +3,39 @@ import { combineReducers } from "redux";
 import { combineEpics, ofType } from "redux-observable";
 import { merge, never, Observable } from "rxjs";
 import websocketConnect from 'rxjs-websockets';
-import { combineLatest, filter, flatMap, map, take, tap } from 'rxjs/operators';
+import { filter, flatMap, map, withLatestFrom } from 'rxjs/operators';
 import { observableFetch } from './observableFetch';
-import { ActionsUnion, createAction, createEmptyNormalizedState, NormalizedModelState } from "./typeUtils";
+import { ActionsUnion, createAction, createEmptyNormalizedState, NormalizedModelState, ModelMap } from "./typeUtils";
+import { createSelector } from 'reselect';
+import createCachedSelector from 're-reselect';
 
+/// State
 export interface ApplicationState {
     currentPlanet: string,
-    jediWindow: string[],
+    jediWindow: JediWindow,
+    idxToId: IdxToId,
     darkJedis: NormalizedModelState<DarkJedi>
 }
 
+/// Selectors
 export const planetName = prop('currentPlanet');
+export const getJediWindow = prop('jediWindow');
+export const getJediWindowArray = createSelector<ApplicationState, JediWindow, number[]>(getJediWindow, window => {
+    const ret = [];
+    for(let i=window.start; i<=window.end; i++) {
+        ret.push(i);
+    }
+    return ret;
+});
 
+// TODO Careful with caching... we should not cache jedis when they're out.
+export const getSithByIndex = createCachedSelector(
+    (state:ApplicationState) => state.darkJedis.byId,
+    (state:ApplicationState, idx: number) => state.idxToId[idx],
+    (byId: ModelMap<DarkJedi>, id: string) => byId[id],
+)((state:ApplicationState, idx: number) => idx);
+
+/// Reducers
 const currentPlanet = (planet: string = '', action: Action) => {
     if(action.type === ActionType.PLANET_CHANGED) {
         return action.payload.planet
@@ -22,22 +43,19 @@ const currentPlanet = (planet: string = '', action: Action) => {
     return planet;
 }
 
-const jediWindow = (jediWindow: string[] = new Array(5), action: Action) => {
+const jediWindow = (jediWindow: JediWindow = {start:0, end: 4}, action: Action) => {
+    return jediWindow;
+}
+
+const idxToId = (idxToId: IdxToId = {}, action: Action) => {
     if(action.type === ActionType.DARK_JEDI_LOADED) {
-        const jediId = action.payload.id;
-        const newJediWindow = [...jediWindow];
-        if(jediWindow.every(j => j == undefined)) {
-            newJediWindow[0] = jediId;
-            return newJediWindow;
-        }
-        for(let i=0; i<newJediWindow.length; i++) {
-            if(newJediWindow[i] == undefined) {
-                newJediWindow[i] = jediId;
-                return newJediWindow;
-            }
+        // TODO Don't store if it's not relevant anymore => dependent reducers
+        return {
+            ...idxToId,
+            [action.payload.idx]: action.payload.id
         }
     }
-    return jediWindow;
+    return idxToId;
 }
 
 const darkJedis = (jedis: NormalizedModelState<DarkJedi> = createEmptyNormalizedState(), action: Action) => {
@@ -60,15 +78,16 @@ const darkJedis = (jedis: NormalizedModelState<DarkJedi> = createEmptyNormalized
 export const createRootReducer = () => combineReducers({
     currentPlanet,
     jediWindow,
-    darkJedis
+    darkJedis,
+    idxToId
 });
 
-interface DarkJedi {
-    id: string,
-    name: string,
-    homeWorld: string,
-    master: string,
-    apprentice: string
+/// Action creators
+export enum ActionType {
+    PLANET_CHANGED = 'PLANET_CHANGED',
+    SCROLL_UP = 'SCROLL_UP',
+    SCROLL_DOWN = 'SCROLL_DOWN',
+    DARK_JEDI_LOADED = 'DARK_JEDI_LOADED'
 }
 
 export const planetChanged = (planet: string) =>
@@ -88,13 +107,7 @@ const ActionCreator = {
 
 type Action = ActionsUnion<typeof ActionCreator>;
 
-export enum ActionType {
-    PLANET_CHANGED = 'PLANET_CHANGED',
-    SCROLL_UP = 'SCROLL_UP',
-    SCROLL_DOWN = 'SCROLL_DOWN',
-    DARK_JEDI_LOADED = 'DARK_JEDI_LOADED'
-}
-
+/// Epics
 const { messages } = websocketConnect('ws://localhost:4000', never());
 
 const planetEpic = () => messages
@@ -104,57 +117,59 @@ const planetEpic = () => messages
     );
 
 const scrollDownEpic = (action$: Observable<Action>, state$: Observable<ApplicationState>) => {
-    const request = (id: string) => observableFetch(`http://localhost:3000/dark-jedis/${id}`);
+    const request = (id: string, idx: number) => observableFetch(`http://localhost:3000/dark-jedis/${id}`)
+        .pipe(
+            map(res => ({
+                res,
+                idx
+            }))
+        );
 
-    const initialRequest = request('3616');
-    const getNextId = (state: ApplicationState) => {
-        for(let i=state.jediWindow.length-1; i>=0; i--) {
-            if(state.jediWindow[i]) {
-                const darkJedi = state.darkJedis.byId[state.jediWindow[i]];
-                return darkJedi.apprentice;
-            }
-        }
-        return null;
-    }
-    const loadNext = state$.pipe(
-        take(1),
-        map(getNextId),
-        filter(id => !!id),
-        tap(id => console.log(id, typeof id, !!id)),
-        flatMap(request)
-    );
-    // const ofTypeJediLoaded = (stream: Observable<Action>) => ofType<Action, ReturnType<typeof darkJediLoaded>>(ActionType.DARK_JEDI_LOADED)(stream);
+    const initialRequest = request('3616', 0);
+    // const nextRequest = (state: ApplicationState) => {
+    //     const needsLoad = state.idxToId[state.jediWindow.end];
+    //     if(!needsLoad) return empty();
+
+    //     for(let i=state.jediWindow.end; i>=state.jediWindow.start; i--) {
+    //         if(state.jediWindow[i]) {
+    //             const darkJedi = state.darkJedis.byId[state.jediWindow[i]];
+    //             return request(darkJedi.apprentice, darkJedi.idx + 1);
+    //         }
+    //     }
+    //     return empty();
+    // }
+    // For nextRequest, I can take a more functional approach wtith something like this instead
+    // const loadNext = state$.pipe(
+    //     take(1),
+    //     map(getNeixtId),
+    //     filter(id => !!id),
+    //     flatMap(request)
+    // );
 
     /* 3 posible causes to load a dark jedi:
-    1. initial load: 3616
-    2. When scroll and not loading: This is, when scroll down && jediWindow[n-2] !== undefined (n-2 because epic runs after reducers, and it has already shifted)
-    3. When loaded and we still need more: This is, when loaded && jediWindow[n-1] === undefined
+    1. Initial load: 3616, 0
+    2. On load, checking that window.end > loaded.idx
+    3. On scroll down, checking that only window.end is not loaded
     */
-    const isLoading = (state: ApplicationState) => state.jediWindow[state.jediWindow.length - 2] == undefined;
-    const needsToLoadMore = (state: ApplicationState) => {
-        // debugger;
-        return state.jediWindow[state.jediWindow.length - 1] == undefined;
-    }
 
     const load = merge(
         initialRequest,
         action$.pipe(
-            ofType(ActionType.SCROLL_DOWN),
-            combineLatest(
-                state$.pipe(map(isLoading))
-            ),
-            filter(([,isLoading]) => !isLoading),
-            flatMap(() => loadNext)
+            ofType<Action, ReturnType<typeof darkJediLoaded>>(ActionType.DARK_JEDI_LOADED),
+            map(action => action.payload),
+            filter(jedi => !!jedi.apprentice),
+            withLatestFrom(state$),
+            filter(([jedi, state]) => state.jediWindow.end > jedi.idx),
+            flatMap(([jedi,]) => request(jedi.apprentice, jedi.idx+1))
         ),
-        action$.pipe(
-            ofType(ActionType.DARK_JEDI_LOADED),
-            tap(a => console.log(a)),
-            combineLatest(
-                state$.pipe(take(1), map(needsToLoadMore))
-            ),
-            filter(([,needsToLoadMore]) => needsToLoadMore),
-            flatMap(() => loadNext)
-        )
+        // action$.pipe(
+        //     ofType(ActionType.SCROLL_DOWN),
+        //     combineLatest(
+        //         state$.pipe(map(isLoading))
+        //     ),
+        //     filter(([,isLoading]) => !isLoading),
+        //     flatMap(() => loadNext)
+        // )
     );
 
 
@@ -177,15 +192,19 @@ const scrollDownEpic = (action$: Observable<Action>, state$: Observable<Applicat
     //     map(res => console.log(res) || null as any),
     //     filter(() => false)
     // )
-    return load.pipe(
-        flatMap(res => res.json()),
-        map(res => ({
+
+    const mapResult = ({res,idx}: {res: Response, idx: number}) => res.json()
+        .then(res => ({
+            idx,
             id: `${res.id}`,
             name: res.name,
             homeWorld: res.homeworld.name,
             master: `${res.master.id}`,
             apprentice: res.apprentice.id && `${res.apprentice.id}`
-        } as DarkJedi)),
+        }));
+
+    return load.pipe(
+        flatMap(mapResult),
         map(darkJediLoaded)
     );
 };
@@ -194,3 +213,20 @@ export const rootEpic = combineEpics(
     planetEpic,
     scrollDownEpic
 );
+
+/// Substates
+interface DarkJedi {
+    idx: number,
+    id: string,
+    name: string,
+    homeWorld: string,
+    master: string,
+    apprentice: string
+}
+export interface JediWindow {
+    start: number,
+    end: number
+}
+interface IdxToId {
+    [key: number]: string
+}

@@ -1,12 +1,12 @@
 import * as React from "react";
 import SithItem from "./sithItem";
+import { ApplicationState, getJediWindowArray } from "../redux";
+import { connect } from "react-redux";
 
-const SithList = () => <ul className="css-slots">
-    <SithItem name={"Jorak Uln"} homeWorld={"Korriban"} />
-    <SithItem name={"Skere Kaan"} homeWorld={"Coruscant"} />
-    <SithItem name={"Na'daz"} homeWorld={"Ryloth"} />
-    <SithItem name={"Kas'im"} homeWorld={"Nal Hutta"} />
-    <SithItem name={"Darth Bane"} homeWorld={"Apatros"} />
+const SithList = ({idxs}: {idxs: number[]}) => <ul className="css-slots">
+    { idxs.map(idx => <SithItem key={idx} idx={idx} />) }
 </ul>
 
-export default SithList;
+export default connect((state: ApplicationState) => ({
+    idxs: getJediWindowArray(state)
+}))(SithList);

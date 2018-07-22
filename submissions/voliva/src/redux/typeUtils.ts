@@ -25,7 +25,7 @@ interface ActionCreatorMap { [key: string]: ActionCreator };
 export type ActionsUnion<A extends ActionCreatorMap> = ReturnType<A[keyof A]>;
 
 /// Reducers
-interface ModelMap<TModel> {
+export interface ModelMap<TModel> {
     [id: string]: TModel;
 };
 export interface NormalizedModelState<TModel> {
