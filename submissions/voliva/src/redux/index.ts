@@ -5,7 +5,7 @@ import { combineEpics, ofType } from "redux-observable";
 import { createSelector } from 'reselect';
 import { merge, never, Observable } from "rxjs";
 import websocketConnect from 'rxjs-websockets';
-import { filter, flatMap, map, withLatestFrom } from 'rxjs/operators';
+import { filter, flatMap, map, takeUntil, withLatestFrom } from 'rxjs/operators';
 import { observableFetch } from './observableFetch';
 import { ActionsUnion, createAction, createEmptyNormalizedState, ModelMap, NormalizedModelState } from "./typeUtils";
 
@@ -193,9 +193,11 @@ const initialRequestEpic = () => requestJedi('3616', 0).pipe(
 interface ScrollEpicParams {
     firstJediIdx: (state: ApplicationState) => number | undefined,
     hasNext: (jedi: DarkJedi) => boolean,
-    requestNext: (jedi: DarkJedi) => ReturnType<typeof requestJedi>,
+    // requestNext: (jedi: DarkJedi) => ReturnType<typeof requestJedi>,
+    getNextJediToRequest: (jedi: DarkJedi) => { id: string, idx: number },
     jediContinuesLoad: (state: ApplicationState, jedi: DarkJedi) => boolean,
     nextScrollAction: ActionType,
+    opositeScrollAction: ActionType,
     onlyNextIsUnloaded: (state: ApplicationState) => boolean
 
 }
@@ -204,12 +206,32 @@ const scrollEpic =
 ({
     firstJediIdx,
     hasNext,
-    requestNext,
+    getNextJediToRequest,
     jediContinuesLoad,
     nextScrollAction,
+    opositeScrollAction,
     onlyNextIsUnloaded,
 }: ScrollEpicParams) =>
 (action$: Observable<Action>, state$: Observable<ApplicationState>) => {
+    const requestNextUntilAbort = (jedi: DarkJedi) => {
+        /*
+            Abort when there's an oposite direction AND
+            it's not relevant anymore.
+        */
+
+        const jediToRequest = getNextJediToRequest(jedi);
+        return requestJedi(jediToRequest.id, jediToRequest.idx).pipe(
+            takeUntil(
+                action$.pipe(
+                    ofType(opositeScrollAction),
+                    withLatestFrom(state$),
+                    // TODO: I'll have to make a specific case for scroll up/down as well - Now if I scroll all the way up until no jedi is visible, then back down, it will abort the request, preventing the load of any other jedi.
+                    filter(([,state]) => jediToRequest.idx < state.jediWindow.start || jediToRequest.idx > state.jediWindow.end)
+                )
+            )
+        );
+    }
+
     const load = merge(
         action$.pipe(
             ofType<Action, ReturnType<typeof darkJediLoaded>>(ActionType.DARK_JEDI_LOADED),
@@ -219,7 +241,7 @@ const scrollEpic =
             withLatestFrom(state$),
             filter(([jedi, state]) => jediContinuesLoad(state, jedi)),
             // tap(([jedi, state]) => console.log(nextScrollAction, 'trigger next', jedi, state)),
-            flatMap(([jedi,]) => requestNext(jedi))
+            flatMap(([jedi,]) => requestNextUntilAbort(jedi))
         ),
         action$.pipe(
             ofType(nextScrollAction),
@@ -233,17 +255,9 @@ const scrollEpic =
                 return state.darkJedis.byId[state.idxToId[idx]];
             }),
             filter(hasNext),
-            flatMap(requestNext)
+            flatMap(requestNextUntilAbort)
         )
     );
-
-    // const abort$ = merge(
-    //     down$.pipe(map(() => 1)),
-    //     up$.pipe(map(() => -1))
-    // ).pipe(
-    //     scan((t:number, v:number) => t+v, 0),
-    //     filter(v => v < 0)
-    // );
 
     return load.pipe(
         flatMap(mapResult),
@@ -264,7 +278,8 @@ const scrollUpEpic = scrollEpic({
         jedi.idx <= defaultTo(Number.MAX_SAFE_INTEGER, firstJediIdx(state)) &&
         jedi.idx > state.jediWindow.start,
     nextScrollAction: ActionType.SCROLL_UP,
-    requestNext: jedi => requestJedi(jedi.master, jedi.idx-1),
+    opositeScrollAction: ActionType.SCROLL_DOWN,
+    getNextJediToRequest: jedi => ({id: jedi.master, idx: jedi.idx-1}),
     onlyNextIsUnloaded: state =>
         state.idxToId[state.jediWindow.start+1] != undefined && 
         state.idxToId[state.jediWindow.start] == undefined
@@ -277,7 +292,8 @@ const scrollDownEpic = scrollEpic({
         jedi.idx >= defaultTo(-Number.MAX_SAFE_INTEGER, lastJediIdx(state)) &&
         jedi.idx < state.jediWindow.end,
     nextScrollAction: ActionType.SCROLL_DOWN,
-    requestNext: jedi => requestJedi(jedi.apprentice, jedi.idx+1),
+    opositeScrollAction: ActionType.SCROLL_UP,
+    getNextJediToRequest: jedi => ({id: jedi.apprentice, idx: jedi.idx+1}),
     onlyNextIsUnloaded: state =>
         state.idxToId[state.jediWindow.end-1] != undefined && 
         state.idxToId[state.jediWindow.end] == undefined

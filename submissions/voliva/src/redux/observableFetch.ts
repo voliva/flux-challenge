@@ -1,5 +1,4 @@
-import { empty, from, Observable, Observer } from "rxjs";
-import { catchError } from "rxjs/operators";
+import { from, Observable, Observer } from "rxjs";
 
 export function observableFetch(input?: Request | string, init: RequestInit = {})
     :Observable<Response> {
@@ -8,19 +7,11 @@ export function observableFetch(input?: Request | string, init: RequestInit = {}
         init.signal = controller.signal;
 
         const subscription = from(fetch(input, init))
-            .pipe(
-                catchError(ex => {
-                    console.warn(ex);
-                    return empty();
-                })
-            )
             .subscribe(obs);
 
         return () => {
-            if(!subscription.closed) {
-                subscription.unsubscribe();
-                controller.abort();
-            }
+            subscription.unsubscribe();
+            setTimeout(() => controller.abort()); // Breaks the stream with DOMException: User aborted request for some reason... I don't know where can I catch this exception, as I want to abort it!
         }
     });
 }
