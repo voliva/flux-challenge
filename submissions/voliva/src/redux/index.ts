@@ -62,13 +62,30 @@ const jediWindow = (jediWindow: JediWindow = {start:0, end: 4}, action: Action) 
     return jediWindow;
 }
 
-const idxToId = (idxToId: IdxToId = {}, action: Action) => {
+const idxToId = (idxToId: IdxToId = {}, jediWindow: JediWindow, action: Action) => {
     if(action.type === ActionType.DARK_JEDI_LOADED) {
-        // TODO Don't store if it's not relevant anymore => dependent reducers
+        const jediLoaded = action.payload;
+        if(jediLoaded.idx < jediWindow.start || jediLoaded.idx > jediWindow.end) {
+            return idxToId;
+        }
+
         return {
             ...idxToId,
-            [action.payload.idx]: action.payload.id
+            [jediLoaded.idx]: jediLoaded.id
         }
+    }
+    if([ActionType.SCROLL_DOWN, ActionType.SCROLL_UP].indexOf(action.type) >= 0) {
+        const idxToRemove = Object.keys(idxToId)
+            .map(idx => parseInt(idx, 10))
+            .filter(idx => idx < jediWindow.start || idx > jediWindow.end);
+        
+        if(idxToRemove.length === 0) {
+            return idxToId;
+        }
+
+        const ret = {...idxToId};
+        idxToRemove.forEach(idx => delete ret[idx]);
+        return ret;
     }
     return idxToId;
 }
@@ -90,12 +107,29 @@ const darkJedis = (jedis: NormalizedModelState<DarkJedi> = createEmptyNormalized
     return jedis;
 }
 
-export const createRootReducer = () => combineReducers({
+const createRootCombinedReducer = () => combineReducers({
     currentPlanet,
     jediWindow,
-    darkJedis,
-    idxToId
+    darkJedis
 });
+
+export const createRootReducer = () => {
+    const combinedReducer = createRootCombinedReducer();
+
+    return (state: ApplicationState, action: Action): ApplicationState => {
+        const { idxToId: idxToIdState, ...restState } = state || {} as any;
+
+        const combinedReducerState = combinedReducer(restState, action);
+        return {
+            ...combinedReducerState,
+            idxToId: idxToId(
+                idxToIdState,
+                combinedReducerState.jediWindow,
+                action
+            )
+        }
+    }
+}
 
 /// Action creators
 export enum ActionType {
