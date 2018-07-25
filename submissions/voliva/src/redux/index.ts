@@ -30,6 +30,17 @@ export const getJediWindowArray = createSelector<ApplicationState, JediWindow, n
 export const getReversedWindowArray = createSelector(getJediWindowArray, arr => [
     ...arr
 ].reverse());
+const findFirstWithValue = (arr: number[], map: {[key: number] : string}) => console.log('ff') || arr.find(idx => map[idx] != undefined)
+const firstJediIdx = createSelector(
+    getJediWindowArray,
+    prop('idxToId'),
+    findFirstWithValue
+);
+const lastJediIdx = createSelector(
+    getReversedWindowArray,
+    prop('idxToId'),
+    findFirstWithValue
+);
 
 // TODO Careful with caching... we should not cache jedis when they're out.
 export const getSithByIndex = createCachedSelector(
@@ -37,6 +48,28 @@ export const getSithByIndex = createCachedSelector(
     (state:ApplicationState, idx: number) => state.idxToId[idx],
     (byId: ModelMap<DarkJedi>, id: string) => byId[id],
 )((state:ApplicationState, idx: number) => idx);
+
+// Again, how can I do this? :/
+export const hasMoreApprentices = (state: ApplicationState) => {
+    const idx = lastJediIdx(state);
+    return !idx || !!getSithByIndex(state, idx).apprentice;
+}
+export const hasMoreMasters = (state: ApplicationState) => {
+    const idx = firstJediIdx(state);
+    return !idx || !!getSithByIndex(state, idx).master;
+}
+const allJediPlanets = (state: ApplicationState) => {
+    const idxs = getJediWindowArray(state);
+    return idxs.map(idx => {
+        const sith = getSithByIndex(state, idx);
+        return sith && sith.homeWorld;
+    }).filter(sith => !!sith);
+}
+export const darkJediFound = createSelector(
+    planetName as (state: ApplicationState) => string,
+    allJediPlanets,
+    (planetName, jediPlanets) => jediPlanets.indexOf(planetName) >= 0
+);
 
 /// Reducers
 const currentPlanet = (planet: string = '', action: Action) => {
@@ -264,12 +297,6 @@ const scrollEpic =
         map(darkJediLoaded)
     );
 };
-
-// TODO move this to selectors
-const firstJediIdx = (state: ApplicationState) =>
-    getJediWindowArray(state).find(idx => state.idxToId[idx] != undefined);
-const lastJediIdx = (state: ApplicationState) => 
-    getReversedWindowArray(state).find(idx => state.idxToId[idx] != undefined);
 
 const scrollUpEpic = scrollEpic({
     firstJediIdx,
